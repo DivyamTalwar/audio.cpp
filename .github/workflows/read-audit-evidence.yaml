@@ -1,0 +1,31 @@
+name: Inspect failed HTTP baseline
+on:
+  push:
+    branches: [audit/http-listener-20260922]
+    paths: [.github/workflows/read-audit-evidence.yaml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read saved baseline evidence without rerunning or changing source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 35660334606 --repo DivyamTalwar/audio.cpp \
+            --name http-listener-validation-evidence --dir /tmp/http-evidence
+          printf '\n=== Normal-descriptor baseline ===\n'
+          cat /tmp/http-evidence/audio-normal-before.log
+          printf '\n=== Actual compiler commands ===\n'
+          cat /tmp/http-evidence/audio-build-before.log
+          printf '\n=== CTest registration ===\n'
+          python3 - <<'PY'
+          import json
+          data = json.load(open('/tmp/http-evidence/audio-ctest-registration.json'))
+          for test in data['tests']:
+              if test['name'] in ('http_live_body_test', 'http_listener_high_fd_test'):
+                  print(json.dumps(test, indent=2))
+          PY
