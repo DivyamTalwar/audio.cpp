@@ -39,7 +39,7 @@ jobs:
             > /tmp/audio-configure.log 2>&1 || { tail -100 /tmp/audio-configure.log; exit 1; }
           cmake --build build/http-audit --target http_listener_test -j 4 \
             > /tmp/audio-build-before.log 2>&1 || { tail -100 /tmp/audio-build-before.log; exit 1; }
-      - name: Confirm ordinary listener works and high-descriptor baseline has a memory error
+      - name: Confirm ordinary listener works and high-descriptor baseline violates FD_SET bounds
         working-directory: work
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
@@ -55,8 +55,15 @@ jobs:
           test "$code" -ne 0
           test "$code" -ne 77
           test "$code" -ne 124
-          grep -Eq 'stack-buffer-overflow|out of bounds|buffer overflow detected' /tmp/audio-high-before.log
-          grep -q 'wait_for_client' /tmp/audio-high-before.log
+          # Fortified libc can detect this before ASan/UBSan intercept a write.
+          # Accept only that precise FD_SET diagnostic or a symbolized sanitizer
+          # report from wait_for_client; never accept a generic test failure.
+          if grep -q 'bit out of range 0 - FD_SETSIZE on fd_set' /tmp/audio-high-before.log; then
+            echo 'Negative control: libc fortify caught the FD_SET bounds violation'
+          else
+            grep -Eq 'stack-buffer-overflow|out of bounds' /tmp/audio-high-before.log
+            grep -q 'wait_for_client' /tmp/audio-high-before.log
+          fi
       - name: Apply the listener fix and rebuild the same target
         working-directory: work
         run: |
