@@ -1,0 +1,95 @@
+name: HTTP listener high-descriptor validation
+on:
+  push:
+    branches: [audit/http-listener-20260922]
+permissions:
+  contents: write
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          path: audit-control
+          persist-credentials: false
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: 779714db0872cc7351d69baeaafb8bd5cf47fac7
+          path: work
+          persist-credentials: false
+      - name: Add public-server high-descriptor test mode
+        working-directory: work
+        run: python3 ../audit-control/audit/http-listener.py test-only
+      - name: Configure CPU transport tests with ASan and UBSan
+        working-directory: work
+        run: |
+          cmake -S . -B build/http-audit -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
+            -DBUILD_SHARED_LIBS=OFF -DENGINE_BUILD_TESTS=ON -DENGINE_BUILD_EXTENDED_TESTS=ON \
+            -DENGINE_ENABLE_NATIVE_CPU=OFF -DENGINE_ENABLE_METAL=OFF \
+            -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
+            > /tmp/audio-configure.log 2>&1 || { tail -100 /tmp/audio-configure.log; exit 1; }
+          cmake --build build/http-audit --target http_live_body_test -j 4 \
+            > /tmp/audio-build-before.log 2>&1 || { tail -100 /tmp/audio-build-before.log; exit 1; }
+      - name: Confirm normal-descriptor control passes and high-descriptor baseline fails
+        working-directory: work
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          timeout 120 build/http-audit/bin/http_live_body_test > /tmp/audio-normal-before.log 2>&1
+          cat /tmp/audio-normal-before.log
+          set +e
+          timeout 120 build/http-audit/bin/http_live_body_test --high-fd > /tmp/audio-high-before.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/audio-high-before.log
+          test "$code" -ne 0
+          test "$code" -ne 77
+          test "$code" -ne 124
+          grep -Eq 'stack-buffer-overflow|out of bounds|buffer overflow detected' /tmp/audio-high-before.log
+      - name: Apply listener fix and rebuild
+        working-directory: work
+        run: |
+          python3 ../audit-control/audit/http-listener.py fix
+          cmake --build build/http-audit --target http_live_body_test -j 4 \
+            > /tmp/audio-build-after.log 2>&1 || { tail -100 /tmp/audio-build-after.log; exit 1; }
+      - name: Repeat normal and high-descriptor runtime regressions under sanitizers
+        working-directory: work
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ctest --test-dir build/http-audit -R '^(http_live_body_test|http_listener_high_fd_test)$' \
+            --repeat until-fail:3 --output-on-failure > /tmp/audio-after.log 2>&1
+          cat /tmp/audio-after.log
+          ! grep -E 'Skipped|Not Run' /tmp/audio-after.log
+          git diff --check
+      - name: Publish only validated source test and CMake changes
+        working-directory: work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git config user.name 'Divyam Talwar'
+          git config user.email '194859478+DivyamTalwar@users.noreply.github.com'
+          git checkout -b fix/http-listener-high-file-descriptors
+          git add app/server/http.cpp tests/unittests/test_http_live_body.cpp CMakeLists.txt
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fix(server): poll POSIX listeners without FD_SETSIZE bounds'
+          git push origin HEAD:refs/heads/fix/http-listener-high-file-descriptors
+          git rev-parse HEAD
+      - name: Preserve build and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: http-listener-validation-evidence
+          path: /tmp/audio-*.log
+          retention-days: 7
