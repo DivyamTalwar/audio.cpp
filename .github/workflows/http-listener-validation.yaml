@@ -2,22 +2,14 @@ name: HTTP listener high-descriptor validation
 on:
   push:
     branches: [audit/http-listener-20260922]
+    paths: [audit/http-listener.py, .github/workflows/http-listener-validation.yaml]
 permissions:
   contents: write
-  actions: write
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Stop superseded whole-runtime build in this fork
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          status=$(gh api repos/DivyamTalwar/audio.cpp/actions/runs/35660056917 --jq .status)
-          if [ "$status" != completed ]; then
-            gh run cancel 35660056917 --repo DivyamTalwar/audio.cpp
-          fi
       - uses: actions/checkout@v6.0.2
         with:
           path: audit-control
@@ -27,51 +19,36 @@ jobs:
           ref: 779714db0872cc7351d69baeaafb8bd5cf47fac7
           path: work
           persist-credentials: false
-      - name: Add public-server high-descriptor test mode
+      - name: Add independent public-listener regression without changing body tests
         working-directory: work
         run: python3 ../audit-control/audit/http-listener.py test-only
-      - name: Validate CMake registration and compile production HTTP sources under sanitizers
+      - name: Configure and build the actual CMake target with ASan and UBSan
         working-directory: work
         run: |
           cmake -S . -B build/http-audit -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
             -DBUILD_SHARED_LIBS=OFF -DENGINE_BUILD_TESTS=ON -DENGINE_BUILD_EXTENDED_TESTS=ON \
             -DAUDIOCPP_MODEL_SET=core \
             -DENGINE_ENABLE_NATIVE_CPU=OFF -DENGINE_ENABLE_METAL=OFF \
             -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
             > /tmp/audio-configure.log 2>&1 || { tail -100 /tmp/audio-configure.log; exit 1; }
-          # Link the real transport and its real dependencies, without unrelated
-          # inference objects pulled in by the normal engine_runtime target.
-          # This validates HTTP behavior, not a full CLI/model/backend build.
-          cat > /tmp/compile-http-audit.sh <<'SH'
-          set -euxo pipefail
-          mkdir -p build/http-audit/bin
-          flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
-          cc -std=c11 "${flags[@]}" -Iexternal/cJSON -c external/cJSON/cJSON.c -o /tmp/http-audit-cjson.o
-          c++ -std=c++17 -pthread "${flags[@]}" -Iinclude -Iexternal/cJSON \
-            tests/unittests/test_http_live_body.cpp \
-            app/server/http.cpp src/framework/debug/trace.cpp \
-            src/framework/io/json.cpp src/framework/io/filesystem.cpp \
-            /tmp/http-audit-cjson.o -o build/http-audit/bin/http_live_body_test
-          SH
-          bash /tmp/compile-http-audit.sh > /tmp/audio-build-before.log 2>&1 || { tail -100 /tmp/audio-build-before.log; exit 1; }
-          ctest --test-dir build/http-audit --show-only=json-v1 > /tmp/audio-ctest-registration.json
-          python3 - <<'PY'
-          import json
-          data = json.load(open('/tmp/audio-ctest-registration.json'))
-          names = {t['name'] for t in data['tests']}
-          assert {'http_live_body_test', 'http_listener_high_fd_test'} <= names
-          PY
-      - name: Confirm normal-descriptor control passes and high-descriptor baseline fails
+          cmake --build build/http-audit --target http_listener_test -j 4 \
+            > /tmp/audio-build-before.log 2>&1 || { tail -100 /tmp/audio-build-before.log; exit 1; }
+      - name: Confirm ordinary listener works and high-descriptor baseline has a memory error
         working-directory: work
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
-          timeout 120 build/http-audit/bin/http_live_body_test > /tmp/audio-normal-before.log 2>&1
+          timeout 30 build/http-audit/bin/http_listener_test > /tmp/audio-normal-before.log 2>&1 || { cat /tmp/audio-normal-before.log; exit 1; }
           cat /tmp/audio-normal-before.log
           set +e
-          timeout 120 build/http-audit/bin/http_live_body_test --high-fd > /tmp/audio-high-before.log 2>&1
+          timeout 30 build/http-audit/bin/http_listener_test --high-fd > /tmp/audio-high-before.log 2>&1
           code=$?
           set -e
           cat /tmp/audio-high-before.log
@@ -79,23 +56,26 @@ jobs:
           test "$code" -ne 77
           test "$code" -ne 124
           grep -Eq 'stack-buffer-overflow|out of bounds|buffer overflow detected' /tmp/audio-high-before.log
-      - name: Apply listener fix and rebuild production transport
+          grep -q 'wait_for_client' /tmp/audio-high-before.log
+      - name: Apply the listener fix and rebuild the same target
         working-directory: work
         run: |
           python3 ../audit-control/audit/http-listener.py fix
-          bash /tmp/compile-http-audit.sh > /tmp/audio-build-after.log 2>&1 || { tail -100 /tmp/audio-build-after.log; exit 1; }
-      - name: Repeat normal and high-descriptor runtime regressions under sanitizers
+          cmake --build build/http-audit --target http_listener_test -j 4 \
+            > /tmp/audio-build-after.log 2>&1 || { tail -100 /tmp/audio-build-after.log; exit 1; }
+      - name: Repeat normal and high-descriptor runtime checks under sanitizers
         working-directory: work
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
-          ctest --test-dir build/http-audit -R '^(http_live_body_test|http_listener_high_fd_test)$' \
-            --repeat until-fail:3 --output-on-failure > /tmp/audio-after.log 2>&1
+          ctest --test-dir build/http-audit -R '^(http_listener_test|http_listener_high_fd_test)$' \
+            --repeat until-fail:3 --output-on-failure > /tmp/audio-after.log 2>&1 || { cat /tmp/audio-after.log; exit 1; }
           cat /tmp/audio-after.log
           ! grep -E 'Skipped|Not Run' /tmp/audio-after.log
+          git diff --exit-code -- tests/unittests/test_http_live_body.cpp
           git diff --check
-      - name: Publish only validated source test and CMake changes
+      - name: Publish only the validated source new test and CMake changes
         working-directory: work
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,19 +84,16 @@ jobs:
           git config user.name 'Divyam Talwar'
           git config user.email '194859478+DivyamTalwar@users.noreply.github.com'
           git checkout -b fix/http-listener-high-file-descriptors
-          git add app/server/http.cpp tests/unittests/test_http_live_body.cpp CMakeLists.txt
+          git add app/server/http.cpp tests/unittests/test_http_listener.cpp CMakeLists.txt
           git diff --cached --check
           git diff --cached --stat
           git commit -m 'fix(server): poll POSIX listeners without FD_SETSIZE bounds'
           git push origin HEAD:refs/heads/fix/http-listener-high-file-descriptors
           git rev-parse HEAD
-      - name: Preserve build and runtime evidence
+      - name: Preserve exact build and runtime evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
           name: http-listener-validation-evidence
-          path: |
-            /tmp/audio-*.log
-            /tmp/audio-ctest-registration.json
-            /tmp/compile-http-audit.sh
+          path: /tmp/audio-*.log
           retention-days: 7
