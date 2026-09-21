@@ -1,0 +1,24 @@
+name: Contribution audit snapshot
+
+on:
+  push:
+    branches: [audit/validation-20260922]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+      - name: Archive tracked source for isolated review
+        run: git archive --format=tar.gz --output=/tmp/audio-cpp-audit-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: audio-cpp-audit-source
+          path: /tmp/audio-cpp-audit-source.tar.gz
+          retention-days: 3
