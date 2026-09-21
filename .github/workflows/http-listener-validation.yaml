@@ -4,11 +4,20 @@ on:
     branches: [audit/http-listener-20260922]
 permissions:
   contents: write
+  actions: write
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
+      - name: Stop superseded full-model audit build in this fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=$(gh api repos/DivyamTalwar/audio.cpp/actions/runs/35659292848 --jq .status)
+          if [ "$status" != completed ]; then
+            gh run cancel 35659292848 --repo DivyamTalwar/audio.cpp
+          fi
       - uses: actions/checkout@v6.0.2
         with:
           path: audit-control
@@ -32,6 +41,7 @@ jobs:
             -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
             -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
             -DBUILD_SHARED_LIBS=OFF -DENGINE_BUILD_TESTS=ON -DENGINE_BUILD_EXTENDED_TESTS=ON \
+            -DAUDIOCPP_MODEL_SET=custom -DAUDIOCPP_MODELS=silero_vad \
             -DENGINE_ENABLE_NATIVE_CPU=OFF -DENGINE_ENABLE_METAL=OFF \
             -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
             > /tmp/audio-configure.log 2>&1 || { tail -100 /tmp/audio-configure.log; exit 1; }
