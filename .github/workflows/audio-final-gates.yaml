@@ -1,7 +1,7 @@
 name: Isolated native parser and output validation
 on:
   push:
-    branches: [audit/finish-audio-25-20260922]
+    branches: [audit/pr-professional-20260923]
 permissions:
   contents: read
 jobs:
@@ -14,13 +14,16 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - label: multipart-delimiter-lines
-            ref: 227d71ef5fa471f6432c7867bf9cfc95410661d5
-            targets: server_multipart_test server_multipart_http_test
-            test_regex: ^server_multipart(_http)?_test$
-            regression_target: server_multipart_test
-            production_file: app/server/multipart.cpp
-            diagnostic: inline boundary-looking bytes must not create extra parts
+          - label: listener-rebased
+            ref: ccb79eb1d670f0ff519051eb3ee5d1f7454a3373
+            base: f6e24957b1d4d2793fd1ff76a46ff1726f8f7de9
+            targets: http_listener_test
+            test_regex: ^http_listener(_high_fd)?_test$
+          - label: framework-file-sink-json
+            ref: 0a79fb68e3154449299b4221dfd9a55101fb836d
+            base: 779714db0872cc7351d69baeaafb8bd5cf47fac7
+            targets: file_sink_json_test
+            test_regex: ^file_sink_json_test$
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -32,7 +35,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/audio-final-gate
           git rev-parse HEAD | tee /tmp/audio-final-gate/commit.txt
-          git diff 779714db0872cc7351d69baeaafb8bd5cf47fac7...HEAD --check
+          git diff "${{ matrix.base }}...HEAD" --check
           cmake -S . -B build/native-audit -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O1 -g' \
@@ -58,28 +61,6 @@ jobs:
             > /tmp/audio-final-gate/patched.log 2>&1 || { cat /tmp/audio-final-gate/patched.log; exit 1; }
           cat /tmp/audio-final-gate/patched.log
           ! grep -E 'Skipped|Not Run|No tests were found' /tmp/audio-final-gate/patched.log
-      - name: Prove the regression against unchanged production source
-        env:
-          PRODUCTION_FILE: ${{ matrix.production_file }}
-          REGRESSION_TARGET: ${{ matrix.regression_target }}
-          DIAGNOSTIC: ${{ matrix.diagnostic }}
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euo pipefail
-          cp "$PRODUCTION_FILE" /tmp/audio-final-gate/patched-source.cpp
-          git show "779714db0872cc7351d69baeaafb8bd5cf47fac7:$PRODUCTION_FILE" > "$PRODUCTION_FILE"
-          cmake --build build/native-audit --target "$REGRESSION_TARGET" -j 4 \
-            > /tmp/audio-final-gate/baseline-build.log 2>&1 || { tail -100 /tmp/audio-final-gate/baseline-build.log; exit 1; }
-          set +e
-          timeout 30 "build/native-audit/bin/$REGRESSION_TARGET" > /tmp/audio-final-gate/baseline.log 2>&1
-          code=$?
-          set -e
-          cat /tmp/audio-final-gate/baseline.log
-          test "$code" -eq 1
-          grep -F "$DIAGNOSTIC" /tmp/audio-final-gate/baseline.log
-          cp /tmp/audio-final-gate/patched-source.cpp "$PRODUCTION_FILE"
-          git diff --exit-code
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
