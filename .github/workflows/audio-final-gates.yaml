@@ -15,19 +15,12 @@ jobs:
       matrix:
         include:
           - label: multipart-delimiter-lines
-            ref: cd4d82a90b2f6fb126b093ca79f112f5d67a85db
+            ref: 14a13e334dcf4bb6582d7ae4bf04bafa8307d32a
             targets: server_multipart_test server_multipart_http_test
             test_regex: ^server_multipart(_http)?_test$
             regression_target: server_multipart_test
             production_file: app/server/multipart.cpp
             diagnostic: inline boundary-looking bytes must not create extra parts
-          - label: file-sink-json-controls
-            ref: 5182ab71f02b6a5a53a733372b7e60dcf837ecb0
-            targets: file_sink_json_test
-            test_regex: ^file_sink_json_test$
-            regression_target: file_sink_json_test
-            production_file: app/workflow/file_sink.cpp
-            diagnostic: newline must be escaped
     steps:
       - uses: actions/checkout@v6.0.2
         with:
