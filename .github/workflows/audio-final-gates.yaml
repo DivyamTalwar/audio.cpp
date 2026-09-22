@@ -1,7 +1,7 @@
 name: Isolated native parser and output validation
 on:
   push:
-    branches: [audit/audio-final-gates-20260922]
+    branches: [audit/finish-audio-25-20260922]
 permissions:
   contents: read
 jobs:
@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - label: multipart-delimiter-lines
-            ref: 14a13e334dcf4bb6582d7ae4bf04bafa8307d32a
+            ref: 227d71ef5fa471f6432c7867bf9cfc95410661d5
             targets: server_multipart_test server_multipart_http_test
             test_regex: ^server_multipart(_http)?_test$
             regression_target: server_multipart_test
