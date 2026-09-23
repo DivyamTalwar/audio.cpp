@@ -1,0 +1,67 @@
+name: Validate CLI batch output identity
+on:
+  push:
+    branches: [audit/next30-audio-validation-20260924]
+permissions:
+  contents: read
+jobs:
+  batch-output-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: 8ed767f5ced7532610ae8269d507057059311600
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure real CMake targets with runtime sanitizers
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/batch-output-gate
+          git rev-parse HEAD | tee /tmp/batch-output-gate/commit.txt
+          git diff 9bdd1d908bbd128e9eb405f5a8e38d0defb84c72...HEAD --check
+          cmake -S . -B build/batch-check -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO='-O1 -g' \
+            -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
+            -DBUILD_SHARED_LIBS=OFF -DENGINE_BUILD_TESTS=ON -DENGINE_BUILD_EXTENDED_TESTS=ON \
+            -DAUDIOCPP_MODEL_SET=core -DENGINE_ENABLE_NATIVE_CPU=OFF \
+            -DENGINE_ENABLE_METAL=OFF -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
+            > /tmp/batch-output-gate/configure.log 2>&1 || { tail -100 /tmp/batch-output-gate/configure.log; exit 1; }
+      - name: Prove new regression fails on unchanged batch builder
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          cp app/cli/batch.cpp /tmp/batch-output-gate/patched-batch.cpp
+          git show 9bdd1d908bbd128e9eb405f5a8e38d0defb84c72:app/cli/batch.cpp > app/cli/batch.cpp
+          cmake --build build/batch-check --target cli_batch_output_names_test -j 4 > /tmp/batch-output-gate/baseline-build.log 2>&1 || { tail -120 /tmp/batch-output-gate/baseline-build.log; exit 1; }
+          set +e
+          timeout 30 build/batch-check/bin/cli_batch_output_names_test > /tmp/batch-output-gate/baseline.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/batch-output-gate/baseline.log
+          test "$result" -eq 1
+          grep -F 'colliding batch output names were accepted' /tmp/batch-output-gate/baseline.log
+          cp /tmp/batch-output-gate/patched-batch.cpp app/cli/batch.cpp
+          git diff --exit-code
+      - name: Build and repeatedly execute patched and adjacent tests
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          cmake --build build/batch-check --target cli_batch_output_names_test cli_request_options_test file_sink_json_test -j 4 > /tmp/batch-output-gate/patched-build.log 2>&1 || { tail -120 /tmp/batch-output-gate/patched-build.log; exit 1; }
+          ctest --test-dir build/batch-check -R '^(cli_batch_output_names|cli_request_options|file_sink_json)_test$' --repeat until-fail:3 --output-on-failure > /tmp/batch-output-gate/patched.log 2>&1 || { cat /tmp/batch-output-gate/patched.log; exit 1; }
+          cat /tmp/batch-output-gate/patched.log
+          ! grep -E 'Skipped|Not Run|No tests were found' /tmp/batch-output-gate/patched.log
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: cli-batch-output-identity-evidence
+          path: /tmp/batch-output-gate/
+          retention-days: 7
