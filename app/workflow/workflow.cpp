@@ -1166,6 +1166,9 @@ void write_workflow_manifest(const WorkflowContext & context) {
     const auto path = context.output_dir / "workflow_manifest.json";
     std::filesystem::create_directories(context.output_dir);
     std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("failed to open workflow manifest: " + path.string());
+    }
     out << "{";
     bool first = true;
     for (const auto & [key, value] : context.values) {
@@ -1177,6 +1180,11 @@ void write_workflow_manifest(const WorkflowContext & context) {
             << ": " << engine::io::json::stringify_string(value);
     }
     out << "\n}\n";
+    // close() flushes buffered output and exposes late write errors.
+    out.close();
+    if (!out) {
+        throw std::runtime_error("failed to write workflow manifest: " + path.string());
+    }
     std::cout << "workflow_manifest_out=" << path.string() << "\n";
 }
 
