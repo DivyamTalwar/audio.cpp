@@ -515,9 +515,14 @@ void record_result_paths(
     const std::optional<std::filesystem::path> & words_out,
     const std::filesystem::path & step_dir,
     WorkflowContext & context) {
-    if (result.audio_output.has_value() && audio_out.has_value()) {
+    // Mirrors emit_task_result: audio_out receives the primary output, or the
+    // sole named output when there is no primary one.
+    if (audio_out.has_value() &&
+        (result.audio_output.has_value() || result.named_audio_outputs.size() == 1)) {
         context.values[id + ".audio_path"] = audio_out->string();
     }
+    // emit_task_result always writes every named output into step_dir as well,
+    // so these aliases stay valid even when audio_out redirects a sole output.
     for (const auto & output : result.named_audio_outputs) {
         const auto path = step_dir / (output.id + ".wav");
         context.values[id + "." + output.id + "_path"] = path.string();
