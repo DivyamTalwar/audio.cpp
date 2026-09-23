@@ -1,7 +1,7 @@
 name: Isolated native parser and output validation
 on:
   push:
-    branches: [audit/next30-audio-test-cases-20260924]
+    branches: [audit/next30-audio-control-path-20260924]
 permissions:
   contents: read
 jobs:
@@ -66,8 +66,11 @@ jobs:
           trap 'cp /tmp/audio-final-gate/batch-patched.cpp app/cli/batch.cpp' EXIT
           git show "${{ matrix.base }}:app/cli/batch.cpp" > app/cli/batch.cpp
           cmake --build build/native-audit --target cli_batch_output_names_test -j 4 > /tmp/audio-final-gate/baseline-build.log 2>&1
+          ctest --test-dir build/native-audit -R '^cli_batch_output_names_test$' --show-only=json-v1 > /tmp/audio-final-gate/test-registration.json
+          test_binary=$(python3 -c 'import json; d=json.load(open("/tmp/audio-final-gate/test-registration.json")); assert len(d["tests"]) == 1; print(d["tests"][0]["command"][0])')
+          test -x "$test_binary"
           set +e
-          build/native-audit/cli_batch_output_names_test > /tmp/audio-final-gate/baseline-test.log 2>&1
+          "$test_binary" > /tmp/audio-final-gate/baseline-test.log 2>&1
           status=$?
           set -e
           cat /tmp/audio-final-gate/baseline-test.log
