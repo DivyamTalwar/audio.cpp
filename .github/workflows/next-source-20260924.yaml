@@ -1,0 +1,21 @@
+name: Pinned contribution source
+on:
+  push:
+    branches: [audit/next-contributions-20260924]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: 9bdd1d908bbd128e9eb405f5a8e38d0defb84c72
+          persist-credentials: false
+      - run: git archive --format=tar.gz -o /tmp/audio-next-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: audio-next-source
+          path: /tmp/audio-next-source.tar.gz
+          retention-days: 7
