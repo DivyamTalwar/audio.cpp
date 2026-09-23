@@ -1,7 +1,7 @@
 name: Workflow correctness candidate validation
 on:
   push:
-    branches: [audit/audio-workflow-followups-20260924]
+    branches: [audit/audio-manifest-validation-20260924]
 permissions:
   contents: read
 jobs:
@@ -14,18 +14,10 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - label: a02-input-resolution
-            ref: c5632e545841d285b0ad3ad7d107471ab4530418
-            target: workflow_input_resolution_test
-            expected: "FAIL test_reference_cycles_are_rejected"
-          - label: a03-named-audio-path
-            ref: 1569cd6e44115fa3e6febf2ff94ca4e04fcde3c9
-            target: workflow_named_audio_paths_test
-            expected: "2 passed, 3 failed"
-          - label: a04-chunked-item-files
-            ref: bc16f1fa27fc68a50f7152fa08d905425caa2a6b
-            target: workflow_chunked_foreach_paths_test
-            expected: "missing expected file"
+          - label: a05-manifest-write-errors
+            ref: 6b9ea0169808c87daea238c636acde4b4c5f5ce2
+            target: workflow_manifest_errors_test
+            expected: "2 passed, 2 failed"
     steps:
       - uses: actions/checkout@v6.0.2
         with:
