@@ -723,7 +723,8 @@ void run_chunked_model_step(
     const engine::runtime::ModelRegistry & registry,
     const engine::io::json::Value & step,
     const WorkflowRunOptions & options,
-    WorkflowContext & context) {
+    WorkflowContext & context,
+    const std::optional<std::string> & foreach_item_id) {
     const std::string id = workflow_string(step, "id");
     const auto request_value = step.find("request");
     if (request_value == nullptr || request_value->is_null()) {
@@ -798,7 +799,11 @@ void run_chunked_model_step(
         throw std::runtime_error("chunked_model step does not support offline execution: " + id);
     }
 
-    const auto step_dir = context.output_dir / id;
+    // foreach iterations get their own directory, matching run_model_step_foreach,
+    // so later items do not overwrite earlier chunks and default transcripts.
+    const auto step_dir = foreach_item_id.has_value()
+        ? context.output_dir / id / *foreach_item_id
+        : context.output_dir / id;
     const auto chunk_dir = step_dir / "chunks";
     std::filesystem::create_directories(chunk_dir);
     engine::runtime::AudioBuffer merged;
@@ -1088,7 +1093,8 @@ void run_workflow_step_once(
     const engine::runtime::ModelRegistry & registry,
     const engine::io::json::Value & step,
     const WorkflowRunOptions & options,
-    WorkflowContext & context) {
+    WorkflowContext & context,
+    const std::optional<std::string> & foreach_item_id = std::nullopt) {
     const std::string type = workflow_string(step, "type");
     if (type == "batch_inputs") {
         run_batch_inputs_step(step, context);
@@ -1099,7 +1105,7 @@ void run_workflow_step_once(
     } else if (type == "format_subtitles") {
         run_format_subtitles_step(step, context);
     } else if (type == "chunked_model") {
-        run_chunked_model_step(registry, step, options, context);
+        run_chunked_model_step(registry, step, options, context, foreach_item_id);
     } else if (type == "mix_audio") {
         run_mix_audio_step(step, context);
     } else {
@@ -1143,7 +1149,7 @@ void run_workflow_step(
         for (const auto & [key, value] : item) {
             context.values["item." + key] = value;
         }
-        run_workflow_step_once(registry, step, options, context);
+        run_workflow_step_once(registry, step, options, context, item.at("id"));
 
         auto output_item = item;
         const std::string prefix = id + ".";
