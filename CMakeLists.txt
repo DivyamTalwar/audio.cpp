@@ -3054,6 +3054,19 @@ if (ENGINE_BUILD_TESTS OR ENGINE_BUILD_EXTENDED_TESTS OR ENGINE_BUILD_MODEL_TEST
         target_sources(file_sink_json_test PRIVATE app/workflow/file_sink.cpp)
         add_test(NAME file_sink_json_test COMMAND file_sink_json_test)
 
+        add_executable(workflow_input_resolution_test
+            tests/unittests/test_workflow_input_resolution.cpp
+            app/workflow/workflow.cpp
+            app/workflow/file_sink.cpp
+            app/cli/args.cpp
+            app/cli/request.cpp
+        )
+        target_link_libraries(workflow_input_resolution_test PRIVATE engine_runtime ggml)
+        if (ENGINE_ENABLE_OPENMP)
+            target_link_libraries(workflow_input_resolution_test PRIVATE OpenMP::OpenMP_CXX)
+        endif()
+        add_test(NAME workflow_input_resolution_test COMMAND workflow_input_resolution_test)
+
         add_executable(server_multipart_test
             tests/unittests/test_server_multipart.cpp
             app/server/multipart.cpp

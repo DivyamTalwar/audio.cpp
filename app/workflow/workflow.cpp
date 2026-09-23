@@ -247,6 +247,94 @@ void validate_unique_batch_ids(
     }
 }
 
+// Resolves ${name} references between workflow inputs. Each input is expanded
+// exactly once, depth-first, so a value can reference inputs declared in any
+// order. ${out_dir} and ${workflow_dir} always mean the builtins. References to
+// names that are not inputs (for example step outputs such as ${step.text_path}
+// or foreach fields such as ${item.id}) are kept literally for later expansion.
+class WorkflowInputResolver {
+public:
+    explicit WorkflowInputResolver(WorkflowContext & context) : context_(context) {}
+
+    void resolve_all() {
+        std::vector<std::string> keys;
+        keys.reserve(context_.values.size());
+        for (const auto & [key, _] : context_.values) {
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end());
+        for (const auto & key : keys) {
+            resolve(key);
+        }
+        for (auto & [key, value] : resolved_) {
+            context_.values[key] = std::move(value);
+        }
+    }
+
+private:
+    const std::string & resolve(const std::string & key) {
+        if (const auto it = resolved_.find(key); it != resolved_.end()) {
+            return it->second;
+        }
+        const auto active = std::find(stack_.begin(), stack_.end(), key);
+        if (active != stack_.end()) {
+            std::string chain;
+            for (auto it = active; it != stack_.end(); ++it) {
+                chain += *it + " -> ";
+            }
+            chain += key;
+            throw std::runtime_error("workflow input reference cycle: " + chain);
+        }
+        stack_.push_back(key);
+        std::string value = expand(context_.values.at(key));
+        stack_.pop_back();
+        return resolved_.emplace(key, std::move(value)).first->second;
+    }
+
+    std::string expand(const std::string & raw) {
+        std::string out;
+        size_t pos = 0;
+        while (pos < raw.size()) {
+            const size_t open = raw.find("${", pos);
+            if (open == std::string::npos) {
+                break;
+            }
+            const size_t close = raw.find('}', open + 2);
+            if (close == std::string::npos) {
+                break;
+            }
+            const size_t nested = raw.find("${", open + 2);
+            if (nested != std::string::npos && nested < close) {
+                out.append(raw, pos, nested - pos);
+                pos = nested;
+                continue;
+            }
+            out.append(raw, pos, open - pos);
+            const std::string name = raw.substr(open + 2, close - open - 2);
+            if (name == "out_dir") {
+                out += context_.output_dir.string();
+            } else if (name == "workflow_dir") {
+                out += context_.workflow_dir.string();
+            } else if (context_.values.count(name) != 0) {
+                out += resolve(name);
+            } else {
+                out.append(raw, open, close + 1 - open);
+            }
+            pos = close + 1;
+        }
+        out.append(raw, pos, std::string::npos);
+        return out;
+    }
+
+    WorkflowContext & context_;
+    std::unordered_map<std::string, std::string> resolved_;
+    std::vector<std::string> stack_;
+};
+
+void resolve_workflow_input_values(WorkflowContext & context) {
+    WorkflowInputResolver(context).resolve_all();
+}
+
 void load_workflow_inputs(
     const engine::io::json::Value & root,
     const WorkflowRunOptions & options,
@@ -266,9 +354,7 @@ void load_workflow_inputs(
     for (const auto & [key, value] : options.workflow_inputs) {
         context.values[key] = value;
     }
-    for (auto & [_, value] : context.values) {
-        value = expand_value(value, context);
-    }
+    resolve_workflow_input_values(context);
 }
 
 void run_batch_inputs_step(
